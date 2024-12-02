@@ -1,0 +1,14 @@
+{
+  "semi": false,
+  "trailingComma": "none",
+  "tabWidth": 2,
+  "arrowParens": "always",
+  "printWidth": 100,
+  "singleQuote": false,
+  "bracketSpacing": true,
+  "endOfLine": "auto",
+  "plugins": ["@trivago/prettier-plugin-sort-imports"],
+  "importOrder": ["^@nestjs/(.*)$", "^@agileoffice/(.*)$", "^[./]"],
+  "importOrderSeparation": true,
+  "importOrderParserPlugins": ["typescript", "classProperties", "decorators-legacy"]
+}

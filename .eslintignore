@@ -1,0 +1,14 @@
+# Dependency directories
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Config files
+*.config.ts
+
+# Type declaration files
+*.d.ts
+
+*.extension.ts

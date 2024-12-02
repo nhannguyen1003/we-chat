@@ -1,0 +1,78 @@
+{
+  "root": true,
+  "plugins": ["prettier", "@typescript-eslint", "import"],
+  "extends": [
+    "eslint:recommended",
+    "plugin:@typescript-eslint/recommended",
+    "plugin:import/errors",
+    "plugin:import/typescript",
+    "prettier"
+  ],
+  "settings": {
+    "import/resolver": {
+      "typescript": {
+        "project": "./tsconfig.json"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "files": ["*.ts", "*.js"],
+      "rules": {
+        "import/extensions": [
+          "warn",
+          "ignorePackages",
+          {
+            "ts": "never",
+            "js": "never"
+          }
+        ],
+        "no-named-as-default": "off",
+        "no-named-as-default-member": "off",
+        "import/no-named-as-default": ["error"],
+        "import/no-named-as-default-member": ["error"],
+        "arrow-parens": ["error", "always"],
+        "comma-dangle": ["error", "never"],
+        "dot-notation": "error",
+        "eqeqeq": "error",
+        "padding-line-between-statements": [
+          "warn",
+          {
+            "blankLine": "always",
+            "prev": "directive",
+            "next": "*"
+          }
+        ],
+        "prefer-const": [
+          "error",
+          {
+            "destructuring": "any",
+            "ignoreReadBeforeAssign": true
+          }
+        ],
+        "prettier/prettier": [
+          "warn",
+          {
+            "endOfLine": "auto",
+            "arrowParens": "always"
+          }
+        ],
+        "strict": "warn",
+        "yoda": "error",
+        "no-unused-vars": "off",
+        "no-console": "warn"
+      }
+    },
+    {
+      "files": ["*.ts"],
+      "rules": {
+        "@typescript-eslint/no-use-before-define": "error",
+        "@typescript-eslint/no-unused-vars": "error"
+      }
+    },
+    {
+      "files": ["*.js"],
+      "rules": {}
+    }
+  ]
+}
