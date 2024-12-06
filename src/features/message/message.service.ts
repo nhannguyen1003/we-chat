@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/features/message/message.service.ts
 import { MessageStatus } from "@prisma/client"
 
@@ -42,7 +43,11 @@ export class MessageService {
       },
       include: {
         media: true,
-        fromUser: true
+        fromUser: {
+          include: {
+            avatar: true // Ensure avatar is included
+          }
+        }
       }
     })
 
@@ -61,25 +66,25 @@ export class MessageService {
       where: { id: message.id },
       include: {
         media: true,
-        fromUser: true
+        fromUser: {
+          include: {
+            avatar: true // Ensure avatar is included
+          }
+        }
       }
     })
 
     return fullMessage as unknown as MessageEntity
   }
 
-  async findMessages(userId: number, findMessageDto: FindMessageDto): Promise<MessageEntity[]> {
-    const { id, chatId, type } = findMessageDto
+  async findMessages(
+    userId: number,
+    findMessageDto: FindMessageDto
+  ): Promise<{ messages: MessageEntity[]; total: number }> {
+    const { chatId, type, search, page = 1, limit = 20 } = findMessageDto
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const whereClause: any = {}
-
-    if (id) {
-      whereClause.id = id
-    }
-
+    // Validate that the user is part of the chat if chatId is provided
     if (chatId) {
-      // Verify user is part of the chat
       const chatUser = await this.prisma.chatUser.findFirst({
         where: {
           chatId,
@@ -90,7 +95,12 @@ export class MessageService {
       if (!chatUser) {
         throw new ForbiddenException("You are not a member of this chat")
       }
+    }
 
+    // Build the where clause based on provided filters
+    const whereClause: any = {}
+
+    if (chatId) {
       whereClause.chatId = chatId
     }
 
@@ -98,15 +108,35 @@ export class MessageService {
       whereClause.type = type
     }
 
+    if (search) {
+      whereClause.content = {
+        contains: search,
+        mode: "insensitive" // Case-insensitive search
+      }
+    }
+
+    // Fetch total count for pagination
+    const total = await this.prisma.message.count({
+      where: whereClause
+    })
+
+    // Fetch messages with pagination and ordering
     const messages = await this.prisma.message.findMany({
       where: whereClause,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * limit,
+      take: limit,
       include: {
         media: true,
-        fromUser: true
+        fromUser: {
+          include: {
+            avatar: true // Ensure avatar is included
+          }
+        }
       }
     })
 
-    return messages as unknown as MessageEntity[]
+    return { messages: messages as unknown as MessageEntity[], total }
   }
 
   async updateMessageStatus(
@@ -116,7 +146,7 @@ export class MessageService {
   ): Promise<MessageEntity> {
     const message = await this.prisma.message.findUnique({
       where: { id },
-      include: { fromUser: true }
+      include: { fromUser: { include: { avatar: true } } }
     })
 
     if (!message) {
@@ -132,7 +162,11 @@ export class MessageService {
       data: { status },
       include: {
         media: true,
-        fromUser: true
+        fromUser: {
+          include: {
+            avatar: true // Ensure avatar is included
+          }
+        }
       }
     })
 

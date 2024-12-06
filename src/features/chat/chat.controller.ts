@@ -10,13 +10,13 @@ import {
   HttpStatus,
   Query
 } from "@nestjs/common"
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiBody, ApiParam } from "@nestjs/swagger"
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiBody, ApiParam, ApiQuery } from "@nestjs/swagger"
 
 import { GetCurrentUserId } from "@agileoffice/core/decorator/get-current-user-id.decorator"
 
 import { ChatService } from "./chat.service"
 import { CreateChatDto } from "./dto/create-chat.dto"
-import { FindChatDto } from "./dto/find-chat.dto"
+import { PaginationDto } from "./dto/pagination.dto"
 import { UpdateChatDto } from "./dto/update-chat.dto"
 import { ChatEntity } from "./entities/chat.entity"
 
@@ -37,17 +37,47 @@ export class ChatController {
     return this.chatService.createChat(createChatDto, userId)
   }
 
-  @ApiOperation({ summary: "Find chats" })
+  @ApiOperation({
+    summary: "Find all chats for a user with pagination"
+  })
+  @ApiQuery({
+    name: "page",
+    required: false,
+    type: Number,
+    description: "Page number for pagination (starting from 1)",
+    example: 1
+  })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: Number,
+    description: "Number of chats per page",
+    example: 20
+  })
   @Get()
   @HttpCode(HttpStatus.OK)
   async findChats(
     @GetCurrentUserId() userId: number,
-    @Query() query: { id?: string }
+    @Query() paginationDto: PaginationDto
   ): Promise<ChatEntity[]> {
-    const findChatDto: FindChatDto = {
-      id: query.id ? parseInt(query.id, 10) : undefined
-    }
-    return this.chatService.findChats(userId, findChatDto)
+    return this.chatService.findChats(userId, paginationDto)
+  }
+
+  @ApiOperation({
+    summary: "Find a specific chat by ID"
+  })
+  @ApiParam({
+    name: "id",
+    description: "ID of the chat to find",
+    type: Number
+  })
+  @Get(":id")
+  @HttpCode(HttpStatus.OK)
+  async findOneChat(
+    @GetCurrentUserId() userId: number,
+    @Param("id") id: number
+  ): Promise<ChatEntity> {
+    return this.chatService.findOneChat(userId, id)
   }
 
   @ApiOperation({ summary: "Update a chat" })

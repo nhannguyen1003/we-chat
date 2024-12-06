@@ -1,5 +1,6 @@
 // src/features/friend-request/friend-request.service.ts
 import { RequestStatus } from "@prisma/client"
+import { ChatStatus } from "@prisma/client"
 
 import { Injectable, ForbiddenException } from "@nestjs/common"
 
@@ -13,6 +14,8 @@ import {
   FriendRequestAlreadyExistsException,
   InvalidFriendRequestStatusException
 } from "./exceptions/friend-request.exception"
+
+// Import ChatStatus enum
 
 @Injectable()
 export class FriendRequestService {
@@ -116,8 +119,48 @@ export class FriendRequestService {
       }
     })
 
-    // If accepted, you might want to add users as friends (not implemented here)
+    // If accepted, update related chats' status to IN_CHAT
+    if (status === RequestStatus.ACCEPTED) {
+      await this.updateChatsStatusToInChat(friendRequest.fromUserId, friendRequest.toUserId)
+    }
 
     return updatedFriendRequest as unknown as FriendRequestEntity
+  }
+
+  /**
+   * Updates the status of chats between two users to IN_CHAT.
+   *
+   * @param userAId - ID of the first user
+   * @param userBId - ID of the second user
+   */
+  private async updateChatsStatusToInChat(userAId: number, userBId: number) {
+    // Find chats that include both users and are currently WAITING
+    const chats = await this.prisma.chat.findMany({
+      where: {
+        type: "DUAL",
+        status: "WAITING",
+        users: {
+          every: {
+            userId: {
+              in: [userAId, userBId]
+            }
+          }
+        }
+      },
+      include: {
+        users: true
+      }
+    })
+
+    for (const chat of chats) {
+      // Ensure that both users are part of the chat
+      const userIds = chat.users.map((cu) => cu.userId)
+      if (userIds.includes(userAId) && userIds.includes(userBId)) {
+        await this.prisma.chat.update({
+          where: { id: chat.id },
+          data: { status: "IN_CHAT" }
+        })
+      }
+    }
   }
 }

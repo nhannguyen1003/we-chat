@@ -1,5 +1,16 @@
-import { Controller, Post, Get, Patch, Body, Param, HttpCode, HttpStatus } from "@nestjs/common"
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiBody } from "@nestjs/swagger"
+// src/features/message/message.controller.ts
+import {
+  Controller,
+  Post,
+  Get,
+  Patch,
+  Body,
+  Param,
+  Query, // Import Query decorator
+  HttpCode,
+  HttpStatus
+} from "@nestjs/common"
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiBody, ApiQuery } from "@nestjs/swagger"
 
 import { GetCurrentUserId } from "@agileoffice/core/decorator/get-current-user-id.decorator"
 
@@ -26,13 +37,49 @@ export class MessageController {
     return this.messageService.sendMessage(userId, createMessageDto)
   }
 
-  @ApiOperation({ summary: "Find messages" })
+  @ApiOperation({ summary: "Find messages with search and pagination" })
+  @ApiQuery({
+    name: "chatId",
+    required: false,
+    type: Number,
+    description: "ID of the chat to find messages in",
+    example: 1
+  })
+  @ApiQuery({
+    name: "type",
+    required: false,
+    type: String,
+    description: "Type of the message",
+    example: "text"
+  })
+  @ApiQuery({
+    name: "search",
+    required: false,
+    type: String,
+    description: "Search query to find messages containing this text",
+    example: "hello"
+  })
+  @ApiQuery({
+    name: "page",
+    required: false,
+    type: Number,
+    description: "Page number for pagination (starting from 1)",
+    example: 1
+  })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: Number,
+    description: "Number of messages per page",
+    example: 20
+  })
   @Get()
   @HttpCode(HttpStatus.OK)
   async findMessages(
     @GetCurrentUserId() userId: number,
-    @Body() findMessageDto: FindMessageDto
-  ): Promise<MessageEntity[]> {
+    @Query() findMessageDto: FindMessageDto // Use @Query() instead of @Body()
+  ): Promise<{ messages: MessageEntity[]; total: number }> {
+    // Update return type
     return this.messageService.findMessages(userId, findMessageDto)
   }
 

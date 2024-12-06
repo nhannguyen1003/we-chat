@@ -1,13 +1,17 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// src/features/chat/chat.service.ts
+import { ChatStatus, MessageStatus } from "@prisma/client"
+
 import { Injectable, ForbiddenException, Logger } from "@nestjs/common"
 import { EventEmitter2 } from "@nestjs/event-emitter"
 
 import { PrismaService } from "../../prisma/prisma.service"
 import { CreateMessageDto } from "../message/dto/create-message.dto"
 import { MessageEntity } from "../message/entities/message.entity"
+import { User } from "../user/entities"
 import { UserService } from "../user/user.service"
 import { CreateChatDto } from "./dto/create-chat.dto"
-import { FindChatDto } from "./dto/find-chat.dto"
+import { PaginationDto } from "./dto/pagination.dto"
 import { UpdateChatDto } from "./dto/update-chat.dto"
 import { ChatEntity } from "./entities/chat.entity"
 import {
@@ -21,6 +25,12 @@ export class ChatService {
   private userStatusMap: Map<number, string> = new Map() // userId -> status
   private readonly logger: Logger = new Logger("ChatService")
 
+  // Define the default avatar
+  private readonly DEFAULT_AVATAR = {
+    id: 0, // Assuming 0 represents the default avatar
+    url: "https://example.com/default-avatar.png" // Replace with your actual default avatar URL
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly userService: UserService,
@@ -28,8 +38,25 @@ export class ChatService {
   ) {}
 
   /**
+   * Assigns a default avatar to the user if none exists.
+   *
+   * @param user - The user object from Prisma
+   * @returns The user object with an assigned avatar
+   */
+  private assignDefaultAvatar(user: any): User {
+    if (!user.avatar) {
+      return {
+        ...user,
+        avatar: this.DEFAULT_AVATAR
+      }
+    }
+    return user
+  }
+
+  /**
    * Creates a new chat (DUAL or GROUP) with specified users.
    * Ensures the creator is included in the chat.
+   * Sets chat status based on friendship.
    *
    * @param createChatDto - DTO containing chat details
    * @param userId - ID of the user creating the chat
@@ -41,10 +68,28 @@ export class ChatService {
     // Include the creator in the chat
     const uniqueUserIds = Array.from(new Set([...userIds, userId]))
 
+    // Determine chat status based on friendship
+    let status: ChatStatus = "WAITING"
+
+    if (type === "DUAL") {
+      const otherUserId = uniqueUserIds.find((id) => id !== userId)
+      if (otherUserId) {
+        const friends = await this.userService.getFriends(userId)
+        const isFriend = friends.some((friend) => friend.id === otherUserId)
+        if (isFriend) {
+          status = "IN_CHAT"
+        }
+      }
+    } else if (type === "GROUP") {
+      // For group chats, default to WAITING. Adjust as needed.
+      status = "WAITING"
+    }
+
     const chat = await this.prisma.chat.create({
       data: {
         type,
         name: type === "GROUP" ? name : undefined,
+        status, // Set status based on friendship
         users: {
           create: uniqueUserIds.map((id) => ({
             userId: id
@@ -54,77 +99,214 @@ export class ChatService {
       include: {
         users: {
           include: {
-            user: true // Include user details
+            user: {
+              include: {
+                avatar: true // Include avatar to satisfy UserEntity
+              }
+            }
           }
         },
-        messages: true
+        messages: {
+          orderBy: { createdAt: "desc" },
+          take: 20, // Limit messages during creation
+          include: {
+            fromUser: {
+              include: {
+                avatar: true // Include avatar to satisfy UserEntity
+              }
+            },
+            media: true
+          }
+        }
       }
     })
 
-    return chat as unknown as ChatEntity
+    // Transform Prisma result to ChatEntity
+    const transformedChat: ChatEntity = {
+      id: chat.id,
+      type: chat.type,
+      status: chat.status,
+      name: chat.name,
+      users: chat.users.map((cu) => ({
+        id: cu.id,
+        chatId: cu.chatId,
+        userId: cu.userId,
+        role: cu.role,
+        user: this.assignDefaultAvatar(cu.user), // Assign default avatar if missing
+        createdAt: cu.createdAt,
+        updatedAt: cu.updatedAt
+      })),
+      messages: chat.messages.map((msg) => ({
+        id: msg.id,
+        type: msg.type,
+        content: msg.content,
+        chatId: msg.chatId,
+        fromUserId: msg.fromUserId,
+        status: msg.status,
+
+        media: msg.media,
+        createdAt: msg.createdAt,
+        updatedAt: msg.updatedAt
+      })),
+      createdAt: chat.createdAt,
+      updatedAt: chat.updatedAt
+    }
+
+    return transformedChat
   }
 
   /**
-   * Finds chats for a user. If an ID is provided, fetches that specific chat.
-   * Otherwise, retrieves all chats the user is part of.
+   * Finds all chats for a user with pagination.
+   * Each chat includes the latest 20 messages.
    *
-   * @param userId - ID of the current user
-   * @param findChatDto - DTO containing search parameters
-   * @returns Array of ChatEntity
+   * @param userId - ID of the user
+   * @param paginationDto - DTO containing pagination parameters
+   * @returns Array of ChatEntity with paginated messages
    */
-  async findChats(userId: number, findChatDto: FindChatDto): Promise<ChatEntity[]> {
-    const { id } = findChatDto
+  async findChats(userId: number, paginationDto: PaginationDto): Promise<ChatEntity[]> {
+    const { page = 1, limit = 20 } = paginationDto
+    const skip = (page - 1) * limit
 
-    if (id) {
-      const chat = await this.prisma.chat.findUnique({
-        where: { id },
-        include: {
-          users: {
-            include: {
-              user: true
-            }
-          },
-          messages: true
-        }
-      })
-
-      if (!chat) {
-        throw new ChatNotFoundException(id)
-      }
-
-      // Check if user is part of the chat
-      const isMember = chat.users.some((cu) => cu.userId === userId)
-      if (!isMember) {
-        throw new ForbiddenException("You are not a member of this chat")
-      }
-
-      return [chat as unknown as ChatEntity]
-    }
-
-    // Fetch all chats the user is part of
     const chats = await this.prisma.chat.findMany({
       where: {
         users: {
-          some: {
-            userId
-          }
+          some: { userId }
         }
       },
+      orderBy: { updatedAt: "desc" },
+      skip,
+      take: limit,
       include: {
         users: {
           include: {
-            user: true
+            user: {
+              include: {
+                avatar: true // Include avatar to satisfy UserEntity
+              }
+            }
           }
         },
-        messages: true
+        messages: {
+          orderBy: { createdAt: "desc" },
+          take: 20, // Fetch the latest 20 messages for each chat
+          include: {
+            fromUser: {
+              include: {
+                avatar: true // Include avatar to satisfy UserEntity
+              }
+            },
+            media: true
+          }
+        }
       }
     })
 
-    return chats as unknown as ChatEntity[]
+    return chats.map((chat) => ({
+      id: chat.id,
+      type: chat.type,
+      status: chat.status,
+      name: chat.name,
+      users: chat.users.map((cu) => ({
+        id: cu.id,
+        chatId: cu.chatId,
+        userId: cu.userId,
+        role: cu.role,
+        user: this.assignDefaultAvatar(cu.user), // Assign default avatar if missing
+        createdAt: cu.createdAt,
+        updatedAt: cu.updatedAt
+      })),
+      messages: chat.messages.reverse().map((message) => ({
+        id: message.id,
+        type: message.type,
+        content: message.content,
+        chatId: message.chatId,
+        fromUserId: message.fromUserId,
+        status: chat.status === "IN_CHAT" ? "DELIVERED" : "PENDING", // Set status based on chat status
+        media: message.media,
+        createdAt: message.createdAt,
+        updatedAt: message.updatedAt
+      })) as MessageEntity[],
+      createdAt: chat.createdAt,
+      updatedAt: chat.updatedAt
+    }))
+  }
+
+  /**
+   * Finds a specific chat by ID, including all its messages.
+   *
+   * @param userId - ID of the user
+   * @param chatId - ID of the chat to find
+   * @returns The chat with all its messages
+   */
+  async findOneChat(userId: number, chatId: number): Promise<ChatEntity> {
+    const chat = await this.prisma.chat.findUnique({
+      where: { id: chatId },
+      include: {
+        users: {
+          include: {
+            user: {
+              include: {
+                avatar: true // Include avatar to satisfy UserEntity
+              }
+            }
+          }
+        },
+        messages: {
+          orderBy: { createdAt: "asc" }, // Fetch all messages in chronological order
+          include: {
+            fromUser: {
+              include: {
+                avatar: true // Include avatar to satisfy UserEntity
+              }
+            },
+            media: true
+          }
+        }
+      }
+    })
+
+    if (!chat) {
+      throw new ChatNotFoundException(chatId)
+    }
+
+    const isMember = chat.users.some((cu) => cu.userId === userId)
+    if (!isMember) {
+      throw new ForbiddenException("You are not a member of this chat")
+    }
+
+    return {
+      id: chat.id,
+      type: chat.type,
+      status: chat.status,
+      name: chat.name,
+      users: chat.users.map((cu) => ({
+        id: cu.id,
+        chatId: cu.chatId,
+        userId: cu.userId,
+        role: cu.role,
+        user: this.assignDefaultAvatar(cu.user), // Assign default avatar if missing
+        createdAt: cu.createdAt,
+        updatedAt: cu.updatedAt
+      })),
+      messages: chat.messages.map((message) => ({
+        id: message.id,
+        type: message.type,
+        content: message.content,
+        chatId: message.chatId,
+        fromUserId: message.fromUserId,
+        status: chat.status === "IN_CHAT" ? "DELIVERED" : "PENDING", // Set status based on chat status
+        media: message.media,
+        createdAt: message.createdAt,
+        updatedAt: message.updatedAt
+      })),
+      createdAt: chat.createdAt,
+      updatedAt: chat.updatedAt
+    }
   }
 
   /**
    * Updates chat details, including adding or removing users.
+   * If adding a user who is already a friend, set chat status to IN_CHAT.
    *
    * @param id - ID of the chat to update
    * @param updateChatDto - DTO containing update details
@@ -182,23 +364,95 @@ export class ChatService {
       })
     }
 
+    // After adding/removing users, check if the chat's status should be updated
+    const updatedUsers = await this.prisma.chatUser.findMany({
+      where: { chatId: id },
+      include: {
+        user: {
+          include: {
+            avatar: true // Include avatar to satisfy UserEntity
+          }
+        }
+      }
+    })
+    const userIds = updatedUsers.map((cu) => cu.userId)
+
+    // Determine if chat should be IN_CHAT
+    // For DUAL chats, check if the two users are friends
+    // For GROUP chats, you might need a different logic
+    let newStatus: ChatStatus = chat.status
+
+    if (chat.type === "DUAL" && userIds.length === 2) {
+      const [userAId, userBId] = userIds
+      const friends = await this.userService.getFriends(userAId)
+      const isFriend = friends.some((friend) => friend.id === userBId)
+      if (isFriend) {
+        newStatus = "IN_CHAT"
+      } else {
+        newStatus = "WAITING"
+      }
+    }
+
     const updatedChat = await this.prisma.chat.update({
       where: { id },
       data: {
         type: updateChatDto.type,
-        name: updateChatDto.name
+        name: updateChatDto.name,
+        status: newStatus // Update chat status based on friendship
       },
       include: {
         users: {
           include: {
-            user: true
+            user: {
+              include: {
+                avatar: true // Include avatar to satisfy UserEntity
+              }
+            }
           }
         },
-        messages: true
+        messages: {
+          orderBy: { createdAt: "desc" },
+          take: 20,
+          include: {
+            fromUser: {
+              include: {
+                avatar: true // Include avatar to satisfy UserEntity
+              }
+            },
+            media: true
+          }
+        }
       }
     })
 
-    return updatedChat as unknown as ChatEntity
+    return {
+      id: updatedChat.id,
+      type: updatedChat.type,
+      status: updatedChat.status,
+      name: updatedChat.name,
+      users: updatedChat.users.map((cu) => ({
+        id: cu.id,
+        chatId: cu.chatId,
+        userId: cu.userId,
+        role: cu.role,
+        user: this.assignDefaultAvatar(cu.user), // Assign default avatar if missing
+        createdAt: cu.createdAt,
+        updatedAt: cu.updatedAt
+      })),
+      messages: updatedChat.messages.reverse().map((message) => ({
+        id: message.id,
+        type: message.type,
+        content: message.content,
+        chatId: message.chatId,
+        fromUserId: message.fromUserId,
+        status: updatedChat.status === "IN_CHAT" ? "DELIVERED" : "PENDING", // Set status based on chat status
+        media: message.media,
+        createdAt: message.createdAt,
+        updatedAt: message.updatedAt
+      })) as MessageEntity[],
+      createdAt: updatedChat.createdAt,
+      updatedAt: updatedChat.updatedAt
+    }
   }
 
   /**
@@ -227,7 +481,17 @@ export class ChatService {
     // Determine the recipient(s)
     const chat = await this.prisma.chat.findUnique({
       where: { id: chatId },
-      include: { users: true }
+      include: {
+        users: {
+          include: {
+            user: {
+              include: {
+                avatar: true // Include avatar to satisfy UserEntity
+              }
+            }
+          }
+        }
+      }
     })
 
     if (!chat) {
@@ -245,6 +509,10 @@ export class ChatService {
     const friendsRecipients = recipientUserIds.filter((id) => friendsSet.has(id))
     const strangersRecipients = recipientUserIds.filter((id) => !friendsSet.has(id))
 
+    // Remove unused variable warning by using 'friendsRecipients'
+    // You can implement logic for friendsRecipients if needed
+    // For now, it's used to set message status accordingly
+
     // Map media to include valid types from MediaType
     const mappedMedia = media?.map((mediaItem) => ({
       type: mediaItem.type, // Use the correct enum value
@@ -252,25 +520,36 @@ export class ChatService {
       userId
     }))
 
-    // Create the message
+    // Create the message with initial status based on chat status
+    const initialStatus = chat.status === "IN_CHAT" ? "DELIVERED" : "PENDING"
+
     const message = await this.prisma.message.create({
       data: {
         chatId,
         fromUserId: userId,
         content,
         type: type || "text",
+        status: initialStatus,
         media: {
           create: mappedMedia
         }
       },
       include: {
         media: true,
-        fromUser: true,
+        fromUser: {
+          include: {
+            avatar: true // Include avatar to satisfy UserEntity
+          }
+        },
         chat: {
           include: {
             users: {
               include: {
-                user: true
+                user: {
+                  include: {
+                    avatar: true // Include avatar to satisfy UserEntity
+                  }
+                }
               }
             },
             messages: true
@@ -280,7 +559,7 @@ export class ChatService {
     })
 
     // Handle delivery based on friendship
-    for (const _recipientId of friendsRecipients) {
+    if (friendsRecipients.length > 0) {
       const updatedMessage = await this.prisma.message.update({
         where: { id: message.id },
         data: {
@@ -288,12 +567,20 @@ export class ChatService {
         },
         include: {
           media: true,
-          fromUser: true,
+          fromUser: {
+            include: {
+              avatar: true // Include avatar to satisfy UserEntity
+            }
+          },
           chat: {
             include: {
               users: {
                 include: {
-                  user: true
+                  user: {
+                    include: {
+                      avatar: true // Include avatar to satisfy UserEntity
+                    }
+                  }
                 }
               },
               messages: true
@@ -302,10 +589,10 @@ export class ChatService {
         }
       })
 
-      await this.emitMessageToChat(chatId, updatedMessage as unknown as MessageEntity)
+      await this.emitMessageToChat(chatId, this.mapPrismaMessageToMessageEntity(updatedMessage))
     }
 
-    for (const _recipientId of strangersRecipients) {
+    if (strangersRecipients.length > 0) {
       await this.prisma.message.update({
         where: { id: message.id },
         data: {
@@ -314,7 +601,7 @@ export class ChatService {
       })
     }
 
-    return message as unknown as MessageEntity
+    return this.mapPrismaMessageToMessageEntity(message)
   }
 
   /**
@@ -360,5 +647,26 @@ export class ChatService {
       userId: friend.id,
       status: this.getUserStatus(friend.id)
     }))
+  }
+
+  /**
+   * Helper method to map Prisma Message to MessageEntity.
+   * Ensures all required properties are present.
+   *
+   * @param message - Prisma message object
+   * @returns MessageEntity
+   */
+  private mapPrismaMessageToMessageEntity(message: any): MessageEntity {
+    return {
+      id: message.id,
+      type: message.type,
+      content: message.content,
+      chatId: message.chatId,
+      fromUserId: message.fromUserId,
+      status: message.status as MessageStatus,
+      media: message.media,
+      createdAt: message.createdAt,
+      updatedAt: message.updatedAt
+    }
   }
 }
